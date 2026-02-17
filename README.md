@@ -1,145 +1,189 @@
-[![npm][npm-image]][npm-url]
-[![npm-downloads][npm-downloads-image]][npm-url]
-[![semantic-release][semantic-release-image]][semantic-release-url]
-<br />
-[![code-style-prettier][code-style-prettier-image]][code-style-prettier-url]
+# Arch Network JavaScript SDK
 
-[code-style-prettier-image]: https://img.shields.io/badge/code_style-prettier-ff69b4.svg?style=flat-square
-[code-style-prettier-url]: https://github.com/prettier/prettier
-[npm-downloads-image]: https://img.shields.io/npm/dm/@solana/web3.js.svg?style=flat
-[npm-image]: https://img.shields.io/npm/v/@solana/web3.js.svg?style=flat
-[npm-url]: https://www.npmjs.com/package/@solana/web3.js
-[semantic-release-image]: https://img.shields.io/badge/%20%20%F0%9F%93%A6%F0%9F%9A%80-semantic--release-e10079.svg
-[semantic-release-url]: https://github.com/semantic-release/semantic-release
+A JavaScript/TypeScript SDK for interacting with the [Arch Network](https://arch.network/) through its JSON-RPC API. This SDK enables developers to build applications on the Arch Network -- a Bitcoin-native execution layer.
 
-> [!NOTE]
-> This is the maintenance branch for the 1.x line of `@solana/web3.js`. You can find the successor to this library here: [`@solana/kit`](https://l.anza.xyz/s/js-sdk-repo).
-
-# Solana JavaScript SDK (v1.x)
-
-Use this to interact with accounts and programs on the Solana network through the Solana [JSON RPC API](https://solana.com/docs/rpc).
+This library is a fork of `@solana/web3.js` v1.x, adapted for Arch Network v0.6.1.
 
 ## Installation
 
-### For use in Node.js or a web application
-
-```
-$ npm install --save @solana/web3.js
+```bash
+npm install @aspect-build/arch-web3.js
 ```
 
-### For use in a browser, without a build system
+## Quick Start
 
-```html
-<!-- Development (un-minified) -->
-<script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.js"></script>
+```typescript
+import {
+  Connection,
+  Keypair,
+  SystemProgram,
+  Transaction,
+  PublicKey,
+} from '@aspect-build/arch-web3.js';
 
-<!-- Production (minified) -->
-<script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
+// Connect to an Arch Network node
+const connection = new Connection('http://localhost:9002');
+
+// Check if the node is ready
+const ready = await connection.isNodeReady();
+
+// Create a keypair
+const keypair = Keypair.generate();
+
+// Get account info
+const accountInfo = await connection.getAccountInfo(keypair.publicKey);
+
+// Build and send a transaction
+const transaction = new Transaction({
+  blockhash: await connection.getBestBlockHash(),
+  lastValidBlockHeight: await connection.getBlockCount(),
+});
+
+transaction.add(
+  SystemProgram.createAccount({
+    fromPubkey: keypair.publicKey,
+    newAccountPubkey: Keypair.generate().publicKey,
+    lamports: 0,
+    space: 100,
+    programId: SystemProgram.programId,
+  }),
+);
+
+transaction.sign(keypair);
+const txid = await connection.sendTransaction(transaction.serialize());
 ```
 
-## Documentation and examples
+## Key Differences from Solana web3.js
 
-- [The Solana Cookbook](https://solanacookbook.com/) has extensive task-based documentation using this library.
-- For more detail on individual functions, see the [latest API Documentation](https://solana-foundation.github.io/solana-web3.js)
+This SDK has been updated to support the Arch Network v0.6.1 protocol. The key differences from the original Solana web3.js are:
 
-## Getting help
+### Transaction Serialization
 
-Have a question or a problem? Check the [Solana Stack Exchange](https://solana.stackexchange.com) to see if anyone else is having the same one. If not, [post a new question](https://solana.stackexchange.com/questions/ask).
+Arch Network uses a different wire format than Solana:
 
-Include:
+- **Version prefix**: Transactions start with a 4-byte u32 LE version field (currently `0`)
+- **Signature count**: Uses a 1-byte u8 instead of Solana's shortvec encoding
+- **Message encoding**: All count/length fields in messages use 4-byte u32 LE instead of shortvec
+- **Max transaction size**: 10,240 bytes (vs Solana's 1,232 bytes)
 
-- A detailed description of what you're trying to achieve
-- Source code, if possible
-- The text of any errors you encountered, with stacktraces if available
+### System Program Instructions
+
+The instruction discriminants match the Arch Network v0.6.1 enum ordering:
+
+| Index | Instruction |
+| ----- | --- |
+| 0 | CreateAccount |
+| 1 | CreateAccountWithAnchor |
+| 2 | Assign |
+| 3 | Anchor |
+| 4 | SignInput |
+| 5 | Transfer |
+| 6 | Allocate |
+| 7 | CreateAccountWithSeed |
+| 8 | AllocateWithSeed |
+| 9 | AssignWithSeed |
+| 10 | TransferWithSeed |
+
+Three Arch-specific instructions are available:
+
+- **`SystemProgram.createAccountWithAnchor()`** -- Create an account anchored to a Bitcoin UTXO
+- **`SystemProgram.anchor()`** -- Anchor an existing account to a Bitcoin UTXO
+- **`SystemProgram.signInput()`** -- Sign a Bitcoin transaction input
+
+Nonce-related instructions are **not supported** on Arch Network.
+
+### RPC Methods
+
+The SDK translates method names to the Arch Network snake_case RPC format automatically. In addition to the standard methods, the following Arch-specific methods are available on the `Connection` class:
+
+| Method | Description |
+| --- | --- |
+| `isNodeReady()` | Check if the node is ready |
+| `getAccountAddress(pubkey)` | Get Bitcoin address for an account |
+| `sendTransactions(txs[])` | Batch send transactions (max 100) |
+| `getProcessedTransaction(txid)` | Get a processed transaction result |
+| `recentTransactions(params?)` | Paginated recent transactions |
+| `getTransactionsByBlock(params)` | Get transactions from a block |
+| `getTransactionsByIds(ids[])` | Get multiple transactions by ID |
+| `getBestBlockHash()` | Get the latest block hash |
+| `getBestFinalizedBlockHash()` | Get the latest finalized block hash |
+| `getBlockHash(height)` | Get block hash by height |
+| `getBlockByHeight(height, filter?)` | Get a block by height |
+| `getFullBlockWithTxids(hash)` | Get full block with transaction IDs |
+| `getBlockCount()` | Get the current block count |
+| `getBlockExecutionReport(hash)` | Get block execution report |
+| `getPeers()` | Get peer statistics |
+| `getCurrentState()` | Get current validator state |
+| `getNetworkPubkey()` | Get the network group public key |
+| `createAccountWithFaucet(pubkey)` | Create account via faucet (testnet) |
+| `checkPreAnchorConflict(pubkeys[])` | Check for pre-anchor conflicts |
+
+### Account Model
+
+`AccountInfo` includes an optional `utxo` field (format: `"txid_hex:vout"`) for Bitcoin UTXO anchoring.
+
+### Compute Budget
+
+Only two compute budget instructions are supported:
+
+| Index | Instruction |
+| ----- | --- |
+| 0 | RequestHeapFrame |
+| 1 | SetComputeUnitLimit |
+
+`RequestUnits` and `SetComputeUnitPrice` are **not supported** on Arch Network.
+
+### Deprecated Modules
+
+The following modules are retained for backward compatibility but are not used by Arch Network:
+
+- `NonceAccount` / nonce-related types
+- `EpochSchedule`
+- `FeeCalculator`
+- `VoteAccount`
+- `ValidatorInfo`
+- `AddressLookupTable`
+
+## Arch-Specific Types
+
+```typescript
+import type {
+  ArchTransactionStatus,   // 'Queued' | 'Processed' | { Failed: string }
+  ArchRollbackStatus,      // 'NotRolledback' | { Rolledback: string }
+  ArchProcessedTransaction,
+  ArchBlock,
+  ArchFullBlock,
+} from '@aspect-build/arch-web3.js';
+```
 
 ## Compatibility
 
-This library requires a JavaScript runtime that supports [`BigInt`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) and the [exponentiation operator](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Exponentiation). Both are supported in the following runtimes:
+This library requires a JavaScript runtime that supports [`BigInt`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) and the [exponentiation operator](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Exponentiation). Both are supported in:
 
-- Browsers, by [release date](https://caniuse.com/bigint):
-  - Chrome: May 2018
-  - Firefox: July 2019
-  - Safari: September 2020
-  - Mobile Safari: September 2020
-  - Edge: January 2020
-  - Opera: June 2018
-  - Samsung Internet: April 2019
-- Runtimes, [by version](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt):
-  - Deno: >=1.0
-  - Node: >=10.4.0
-- React Native:
-  - \>=0.7.0 using the [Hermes](https://reactnative.dev/blog/2022/07/08/hermes-as-the-default) engine ([integration guide](https://solanacookbook.com/integrations/react-native.html#how-to-use-solana-web3-js-in-a-react-native-app)):
+- **Browsers**: Chrome 67+, Firefox 68+, Safari 14+, Edge 79+
+- **Node.js**: >= 10.4.0
+- **Deno**: >= 1.0
+- **React Native**: >= 0.70 with the Hermes engine
 
-## Development environment setup
+## Development
 
-### Testing
+### Running Tests
 
-#### Unit tests
-
-To run the full suite of unit tests, execute the following in the root:
-
-```shell
-$ npm test
+```bash
+npm install
+npm test
 ```
 
-#### Integration tests
+### Running Arch Network-Specific Tests
 
-Integration tests require a validator client running on your machine.
-
-To install a test validator:
-
-```shell
-$ npm run test:live-with-test-validator:setup
-```
-
-To start the test validator and run all of the integration tests in live mode:
-
-```shell
-$ cd packages/library-legacy
-$ npm run test:live-with-test-validator
+```bash
+npx cross-env NODE_ENV=test NODE_OPTIONS='--import tsx' npx mocha './test/arch-network.test.ts'
 ```
 
 ## Contributing
 
-If you found a bug or would like to request a feature, please [file an issue](https://github.com/solana-foundation/solana-web3.js/issues/new). If, based on the discussion on an issue you would like to offer a code change, please make a [pull request](https://github.com/solana-foundation/solana-web3.js/compare). If neither of these describes what you would like to contribute, read the [getting help](#getting-help) section above.
+If you found a bug or would like to request a feature, please [file an issue](https://github.com/Arch-Network/arch-network-web3.js/issues/new). Pull requests are welcome.
 
-## Disclaimer
+## License
 
-All claims, content, designs, algorithms, estimates, roadmaps,
-specifications, and performance measurements described in this project
-are done with the Solana Foundation's ("SF") best efforts. It is up to
-the reader to check and validate their accuracy and truthfulness.
-Furthermore nothing in this project constitutes a solicitation for
-investment.
-
-Any content produced by SF or developer resources that SF provides, are
-for educational and inspiration purposes only. SF does not encourage,
-induce or sanction the deployment, integration or use of any such
-applications (including the code comprising the Solana blockchain
-protocol) in violation of applicable laws or regulations and hereby
-prohibits any such deployment, integration or use. This includes use of
-any such applications by the reader (a) in violation of export control
-or sanctions laws of the United States or any other applicable
-jurisdiction, (b) if the reader is located in or ordinarily resident in
-a country or territory subject to comprehensive sanctions administered
-by the U.S. Office of Foreign Assets Control (OFAC), or (c) if the
-reader is or is working on behalf of a Specially Designated National
-(SDN) or a person subject to similar blocking or denied party
-prohibitions.
-
-The reader should be aware that U.S. export control and sanctions laws
-prohibit U.S. persons (and other persons that are subject to such laws)
-from transacting with persons in certain countries and territories or
-that are on the SDN list. As a project based primarily on open-source
-software, it is possible that such sanctioned persons may nevertheless
-bypass prohibitions, obtain the code comprising the Solana blockchain
-protocol (or other project code or applications) and deploy, integrate,
-or otherwise use it. Accordingly, there is a risk to individuals that
-other persons using the Solana blockchain protocol may be sanctioned
-persons and that transactions with such persons would be a violation of
-U.S. export controls and sanctions law. This risk applies to
-individuals, organizations, and other ecosystem participants that
-deploy, integrate, or use the Solana blockchain protocol code directly
-(e.g., as a node operator), and individuals that transact on the Solana
-blockchain through light clients, third party interfaces, and/or wallet
-software.
+MIT
