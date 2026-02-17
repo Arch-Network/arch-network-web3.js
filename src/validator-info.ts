@@ -1,3 +1,7 @@
+/**
+ * @deprecated Validator info is not used in Arch Network.
+ * This module is retained for backward compatibility only.
+ */
 import {Buffer} from 'buffer';
 import {
   assert as assertType,

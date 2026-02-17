@@ -1,11 +1,10 @@
 import bs58 from 'bs58';
 import {Buffer} from 'buffer';
 
-import {PACKET_DATA_SIZE, SIGNATURE_LENGTH_IN_BYTES} from './constants';
+import {PACKET_DATA_SIZE, SIGNATURE_LENGTH_IN_BYTES, TRANSACTION_VERSION} from './constants';
 import {Connection} from '../connection';
 import {Message} from '../message';
 import {PublicKey} from '../publickey';
-import * as shortvec from '../utils/shortvec-encoding';
 import {toBuffer} from '../utils/to-buffer';
 import invariant from '../utils/assert';
 import type {Signer} from '../keypair';
@@ -834,29 +833,38 @@ export class Transaction {
 
   /**
    * @internal
+   *
+   * Arch Network wire format:
+   * [version: u32 LE (4 bytes)] [sig_count: u8 (1 byte)] [sig_1..sig_n (64 bytes each)] [message_bytes]
    */
   _serialize(signData: Buffer): Buffer {
     const {signatures} = this;
-    const signatureCount: number[] = [];
-    shortvec.encodeLength(signatureCount, signatures.length);
-    const transactionLength =
-      signatureCount.length + signatures.length * 64 + signData.length;
-    const wireTransaction = Buffer.alloc(transactionLength);
     invariant(signatures.length < 256);
-    Buffer.from(signatureCount).copy(wireTransaction, 0);
+
+    const versionSize = 4;
+    const sigCountSize = 1;
+    const transactionLength =
+      versionSize + sigCountSize + signatures.length * 64 + signData.length;
+    const wireTransaction = Buffer.alloc(transactionLength);
+
+    let offset = 0;
+
+    wireTransaction.writeUInt32LE(TRANSACTION_VERSION, offset);
+    offset += 4;
+
+    wireTransaction.writeUInt8(signatures.length, offset);
+    offset += 1;
+
     signatures.forEach(({signature}, index) => {
       if (signature !== null) {
         invariant(signature.length === 64, `signature has invalid length`);
-        Buffer.from(signature).copy(
-          wireTransaction,
-          signatureCount.length + index * 64,
-        );
+        Buffer.from(signature).copy(wireTransaction, offset + index * 64);
       }
     });
-    signData.copy(
-      wireTransaction,
-      signatureCount.length + signatures.length * 64,
-    );
+    offset += signatures.length * 64;
+
+    signData.copy(wireTransaction, offset);
+
     invariant(
       wireTransaction.length <= PACKET_DATA_SIZE,
       `Transaction too large: ${wireTransaction.length} > ${PACKET_DATA_SIZE}`,
@@ -894,22 +902,32 @@ export class Transaction {
   /**
    * Parse a wire transaction into a Transaction object.
    *
-   * @param {Buffer | Uint8Array | Array<number>} buffer Signature of wire Transaction
+   * Arch Network wire format:
+   * [version: u32 LE (4 bytes)] [sig_count: u8 (1 byte)] [sig_1..sig_n (64 bytes each)] [message_bytes]
+   *
+   * @param {Buffer | Uint8Array | Array<number>} buffer Serialized wire Transaction
    *
    * @returns {Transaction} Transaction associated with the signature
    */
   static from(buffer: Buffer | Uint8Array | Array<number>): Transaction {
-    // Slice up wire data
-    let byteArray = [...buffer];
+    const buf = Buffer.from(buffer);
+    let offset = 0;
 
-    const signatureCount = shortvec.decodeLength(byteArray);
+    const _version = buf.readUInt32LE(offset);
+    offset += 4;
+
+    const signatureCount = buf.readUInt8(offset);
+    offset += 1;
+
     let signatures = [];
     for (let i = 0; i < signatureCount; i++) {
-      const signature = guardedSplice(byteArray, 0, SIGNATURE_LENGTH_IN_BYTES);
+      const signature = buf.slice(offset, offset + SIGNATURE_LENGTH_IN_BYTES);
       signatures.push(bs58.encode(Buffer.from(signature)));
+      offset += SIGNATURE_LENGTH_IN_BYTES;
     }
 
-    return Transaction.populate(Message.from(byteArray), signatures);
+    const messageBytes = buf.slice(offset);
+    return Transaction.populate(Message.from(messageBytes), signatures);
   }
 
   /**

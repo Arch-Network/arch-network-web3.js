@@ -1,4 +1,5 @@
 import * as BufferLayout from '@solana/buffer-layout';
+import {Buffer} from 'buffer';
 
 import {
   encodeData,
@@ -7,10 +8,8 @@ import {
   IInstructionInputData,
 } from '../instruction';
 import * as Layout from '../layout';
-import {NONCE_ACCOUNT_LENGTH} from '../nonce-account';
 import {PublicKey} from '../publickey';
-import {SYSVAR_RECENT_BLOCKHASHES_PUBKEY, SYSVAR_RENT_PUBKEY} from '../sysvar';
-import {Transaction, TransactionInstruction} from '../transaction';
+import {TransactionInstruction} from '../transaction';
 import {toBuffer} from '../utils/to-buffer';
 import {u64} from '../utils/bigint';
 
@@ -28,6 +27,26 @@ export type CreateAccountParams = {
   space: number;
   /** Public key of the program to assign as the owner of the created account */
   programId: PublicKey;
+};
+
+/**
+ * Create account with UTXO anchor system transaction params (Arch-specific)
+ */
+export type CreateAccountWithAnchorParams = {
+  /** The account that will transfer lamports to the created account */
+  fromPubkey: PublicKey;
+  /** Public key of the created account */
+  newAccountPubkey: PublicKey;
+  /** Amount of lamports to transfer to the created account */
+  lamports: number;
+  /** Amount of space in bytes to allocate to the created account */
+  space: number;
+  /** Public key of the program to assign as the owner of the created account */
+  programId: PublicKey;
+  /** Bitcoin transaction ID (32 bytes) for the UTXO anchor */
+  txid: Uint8Array;
+  /** Output index (vout) of the UTXO anchor */
+  vout: number;
 };
 
 /**
@@ -53,6 +72,28 @@ export type AssignParams = {
 };
 
 /**
+ * Anchor account to UTXO system transaction params (Arch-specific)
+ */
+export type AnchorParams = {
+  /** Public key of the account to anchor */
+  accountPubkey: PublicKey;
+  /** Bitcoin transaction ID (32 bytes) for the UTXO anchor */
+  txid: Uint8Array;
+  /** Output index (vout) of the UTXO anchor */
+  vout: number;
+};
+
+/**
+ * Sign Bitcoin transaction input system transaction params (Arch-specific)
+ */
+export type SignInputParams = {
+  /** Public key of the signer account */
+  signerPubkey: PublicKey;
+  /** Index of the Bitcoin transaction input to sign */
+  index: number;
+};
+
+/**
  * Create account with seed system transaction params
  */
 export type CreateAccountWithSeedParams = {
@@ -70,84 +111,6 @@ export type CreateAccountWithSeedParams = {
   space: number;
   /** Public key of the program to assign as the owner of the created account */
   programId: PublicKey;
-};
-
-/**
- * Create nonce account system transaction params
- */
-export type CreateNonceAccountParams = {
-  /** The account that will transfer lamports to the created nonce account */
-  fromPubkey: PublicKey;
-  /** Public key of the created nonce account */
-  noncePubkey: PublicKey;
-  /** Public key to set as authority of the created nonce account */
-  authorizedPubkey: PublicKey;
-  /** Amount of lamports to transfer to the created nonce account */
-  lamports: number;
-};
-
-/**
- * Create nonce account with seed system transaction params
- */
-export type CreateNonceAccountWithSeedParams = {
-  /** The account that will transfer lamports to the created nonce account */
-  fromPubkey: PublicKey;
-  /** Public key of the created nonce account */
-  noncePubkey: PublicKey;
-  /** Public key to set as authority of the created nonce account */
-  authorizedPubkey: PublicKey;
-  /** Amount of lamports to transfer to the created nonce account */
-  lamports: number;
-  /** Base public key to use to derive the address of the nonce account */
-  basePubkey: PublicKey;
-  /** Seed to use to derive the address of the nonce account */
-  seed: string;
-};
-
-/**
- * Initialize nonce account system instruction params
- */
-export type InitializeNonceParams = {
-  /** Nonce account which will be initialized */
-  noncePubkey: PublicKey;
-  /** Public key to set as authority of the initialized nonce account */
-  authorizedPubkey: PublicKey;
-};
-
-/**
- * Advance nonce account system instruction params
- */
-export type AdvanceNonceParams = {
-  /** Nonce account */
-  noncePubkey: PublicKey;
-  /** Public key of the nonce authority */
-  authorizedPubkey: PublicKey;
-};
-
-/**
- * Withdraw nonce account system transaction params
- */
-export type WithdrawNonceParams = {
-  /** Nonce account */
-  noncePubkey: PublicKey;
-  /** Public key of the nonce authority */
-  authorizedPubkey: PublicKey;
-  /** Public key of the account which will receive the withdrawn nonce account balance */
-  toPubkey: PublicKey;
-  /** Amount of lamports to withdraw from the nonce account */
-  lamports: number;
-};
-
-/**
- * Authorize nonce account system transaction params
- */
-export type AuthorizeNonceParams = {
-  /** Nonce account */
-  noncePubkey: PublicKey;
-  /** Public key of the current nonce authority */
-  authorizedPubkey: PublicKey;
-  /** Public key to set as the new nonce authority */
-  newAuthorizedPubkey: PublicKey;
 };
 
 /**
@@ -444,89 +407,6 @@ export class SystemInstruction {
   }
 
   /**
-   * Decode a nonce initialize system instruction and retrieve the instruction params.
-   */
-  static decodeNonceInitialize(
-    instruction: TransactionInstruction,
-  ): InitializeNonceParams {
-    this.checkProgramId(instruction.programId);
-    this.checkKeyLength(instruction.keys, 3);
-
-    const {authorized} = decodeData(
-      SYSTEM_INSTRUCTION_LAYOUTS.InitializeNonceAccount,
-      instruction.data,
-    );
-
-    return {
-      noncePubkey: instruction.keys[0].pubkey,
-      authorizedPubkey: new PublicKey(authorized),
-    };
-  }
-
-  /**
-   * Decode a nonce advance system instruction and retrieve the instruction params.
-   */
-  static decodeNonceAdvance(
-    instruction: TransactionInstruction,
-  ): AdvanceNonceParams {
-    this.checkProgramId(instruction.programId);
-    this.checkKeyLength(instruction.keys, 3);
-
-    decodeData(
-      SYSTEM_INSTRUCTION_LAYOUTS.AdvanceNonceAccount,
-      instruction.data,
-    );
-
-    return {
-      noncePubkey: instruction.keys[0].pubkey,
-      authorizedPubkey: instruction.keys[2].pubkey,
-    };
-  }
-
-  /**
-   * Decode a nonce withdraw system instruction and retrieve the instruction params.
-   */
-  static decodeNonceWithdraw(
-    instruction: TransactionInstruction,
-  ): WithdrawNonceParams {
-    this.checkProgramId(instruction.programId);
-    this.checkKeyLength(instruction.keys, 5);
-
-    const {lamports} = decodeData(
-      SYSTEM_INSTRUCTION_LAYOUTS.WithdrawNonceAccount,
-      instruction.data,
-    );
-
-    return {
-      noncePubkey: instruction.keys[0].pubkey,
-      toPubkey: instruction.keys[1].pubkey,
-      authorizedPubkey: instruction.keys[4].pubkey,
-      lamports,
-    };
-  }
-
-  /**
-   * Decode a nonce authorize system instruction and retrieve the instruction params.
-   */
-  static decodeNonceAuthorize(
-    instruction: TransactionInstruction,
-  ): AuthorizeNonceParams {
-    this.checkProgramId(instruction.programId);
-    this.checkKeyLength(instruction.keys, 2);
-
-    const {authorized} = decodeData(
-      SYSTEM_INSTRUCTION_LAYOUTS.AuthorizeNonceAccount,
-      instruction.data,
-    );
-
-    return {
-      noncePubkey: instruction.keys[0].pubkey,
-      authorizedPubkey: instruction.keys[1].pubkey,
-      newAuthorizedPubkey: new PublicKey(authorized),
-    };
-  }
-
-  /**
    * @internal
    */
   static checkProgramId(programId: PublicKey) {
@@ -549,51 +429,48 @@ export class SystemInstruction {
 
 /**
  * An enumeration of valid SystemInstructionType's
+ * Arch Network v0.6.1 discriminant order
  */
 export type SystemInstructionType =
-  // FIXME
-  // It would be preferable for this type to be `keyof SystemInstructionInputData`
-  // but Typedoc does not transpile `keyof` expressions.
-  // See https://github.com/TypeStrong/typedoc/issues/1894
-  | 'AdvanceNonceAccount'
-  | 'Allocate'
-  | 'AllocateWithSeed'
-  | 'Assign'
-  | 'AssignWithSeed'
-  | 'AuthorizeNonceAccount'
   | 'Create'
-  | 'CreateWithSeed'
-  | 'InitializeNonceAccount'
+  | 'CreateWithAnchor'
+  | 'Assign'
+  | 'Anchor'
+  | 'SignInput'
   | 'Transfer'
-  | 'TransferWithSeed'
-  | 'WithdrawNonceAccount'
-  | 'UpgradeNonceAccount';
+  | 'Allocate'
+  | 'CreateWithSeed'
+  | 'AllocateWithSeed'
+  | 'AssignWithSeed'
+  | 'TransferWithSeed';
 
 type SystemInstructionInputData = {
-  AdvanceNonceAccount: IInstructionInputData;
-  Allocate: IInstructionInputData & {
+  Create: IInstructionInputData & {
+    lamports: number;
+    programId: Uint8Array;
     space: number;
   };
-  AllocateWithSeed: IInstructionInputData & {
-    base: Uint8Array;
-    programId: Uint8Array;
-    seed: string;
+  CreateWithAnchor: IInstructionInputData & {
+    lamports: number;
     space: number;
+    programId: Uint8Array;
+    txid: Uint8Array;
+    vout: number;
   };
   Assign: IInstructionInputData & {
     programId: Uint8Array;
   };
-  AssignWithSeed: IInstructionInputData & {
-    base: Uint8Array;
-    seed: string;
-    programId: Uint8Array;
+  Anchor: IInstructionInputData & {
+    txid: Uint8Array;
+    vout: number;
   };
-  AuthorizeNonceAccount: IInstructionInputData & {
-    authorized: Uint8Array;
+  SignInput: IInstructionInputData & {
+    index: number;
   };
-  Create: IInstructionInputData & {
-    lamports: number;
-    programId: Uint8Array;
+  Transfer: IInstructionInputData & {
+    lamports: bigint;
+  };
+  Allocate: IInstructionInputData & {
     space: number;
   };
   CreateWithSeed: IInstructionInputData & {
@@ -603,25 +480,27 @@ type SystemInstructionInputData = {
     seed: string;
     space: number;
   };
-  InitializeNonceAccount: IInstructionInputData & {
-    authorized: Uint8Array;
+  AllocateWithSeed: IInstructionInputData & {
+    base: Uint8Array;
+    programId: Uint8Array;
+    seed: string;
+    space: number;
   };
-  Transfer: IInstructionInputData & {
-    lamports: bigint;
+  AssignWithSeed: IInstructionInputData & {
+    base: Uint8Array;
+    seed: string;
+    programId: Uint8Array;
   };
   TransferWithSeed: IInstructionInputData & {
     lamports: bigint;
     programId: Uint8Array;
     seed: string;
   };
-  WithdrawNonceAccount: IInstructionInputData & {
-    lamports: number;
-  };
-  UpgradeNonceAccount: IInstructionInputData;
 };
 
 /**
  * An enumeration of valid system InstructionType's
+ * Arch Network v0.6.1 discriminant ordering
  * @internal
  */
 export const SYSTEM_INSTRUCTION_LAYOUTS = Object.freeze<{
@@ -638,22 +517,55 @@ export const SYSTEM_INSTRUCTION_LAYOUTS = Object.freeze<{
       Layout.publicKey('programId'),
     ]),
   },
-  Assign: {
+  CreateWithAnchor: {
     index: 1,
+    layout: BufferLayout.struct<SystemInstructionInputData['CreateWithAnchor']>([
+      BufferLayout.u32('instruction'),
+      BufferLayout.ns64('lamports'),
+      BufferLayout.ns64('space'),
+      Layout.publicKey('programId'),
+      BufferLayout.blob(32, 'txid'),
+      BufferLayout.u32('vout'),
+    ]),
+  },
+  Assign: {
+    index: 2,
     layout: BufferLayout.struct<SystemInstructionInputData['Assign']>([
       BufferLayout.u32('instruction'),
       Layout.publicKey('programId'),
     ]),
   },
+  Anchor: {
+    index: 3,
+    layout: BufferLayout.struct<SystemInstructionInputData['Anchor']>([
+      BufferLayout.u32('instruction'),
+      BufferLayout.blob(32, 'txid'),
+      BufferLayout.u32('vout'),
+    ]),
+  },
+  SignInput: {
+    index: 4,
+    layout: BufferLayout.struct<SystemInstructionInputData['SignInput']>([
+      BufferLayout.u32('instruction'),
+      BufferLayout.u32('index'),
+    ]),
+  },
   Transfer: {
-    index: 2,
+    index: 5,
     layout: BufferLayout.struct<SystemInstructionInputData['Transfer']>([
       BufferLayout.u32('instruction'),
       u64('lamports'),
     ]),
   },
+  Allocate: {
+    index: 6,
+    layout: BufferLayout.struct<SystemInstructionInputData['Allocate']>([
+      BufferLayout.u32('instruction'),
+      BufferLayout.ns64('space'),
+    ]),
+  },
   CreateWithSeed: {
-    index: 3,
+    index: 7,
     layout: BufferLayout.struct<SystemInstructionInputData['CreateWithSeed']>([
       BufferLayout.u32('instruction'),
       Layout.publicKey('base'),
@@ -663,39 +575,8 @@ export const SYSTEM_INSTRUCTION_LAYOUTS = Object.freeze<{
       Layout.publicKey('programId'),
     ]),
   },
-  AdvanceNonceAccount: {
-    index: 4,
-    layout: BufferLayout.struct<
-      SystemInstructionInputData['AdvanceNonceAccount']
-    >([BufferLayout.u32('instruction')]),
-  },
-  WithdrawNonceAccount: {
-    index: 5,
-    layout: BufferLayout.struct<
-      SystemInstructionInputData['WithdrawNonceAccount']
-    >([BufferLayout.u32('instruction'), BufferLayout.ns64('lamports')]),
-  },
-  InitializeNonceAccount: {
-    index: 6,
-    layout: BufferLayout.struct<
-      SystemInstructionInputData['InitializeNonceAccount']
-    >([BufferLayout.u32('instruction'), Layout.publicKey('authorized')]),
-  },
-  AuthorizeNonceAccount: {
-    index: 7,
-    layout: BufferLayout.struct<
-      SystemInstructionInputData['AuthorizeNonceAccount']
-    >([BufferLayout.u32('instruction'), Layout.publicKey('authorized')]),
-  },
-  Allocate: {
-    index: 8,
-    layout: BufferLayout.struct<SystemInstructionInputData['Allocate']>([
-      BufferLayout.u32('instruction'),
-      BufferLayout.ns64('space'),
-    ]),
-  },
   AllocateWithSeed: {
-    index: 9,
+    index: 8,
     layout: BufferLayout.struct<SystemInstructionInputData['AllocateWithSeed']>(
       [
         BufferLayout.u32('instruction'),
@@ -707,7 +588,7 @@ export const SYSTEM_INSTRUCTION_LAYOUTS = Object.freeze<{
     ),
   },
   AssignWithSeed: {
-    index: 10,
+    index: 9,
     layout: BufferLayout.struct<SystemInstructionInputData['AssignWithSeed']>([
       BufferLayout.u32('instruction'),
       Layout.publicKey('base'),
@@ -716,7 +597,7 @@ export const SYSTEM_INSTRUCTION_LAYOUTS = Object.freeze<{
     ]),
   },
   TransferWithSeed: {
-    index: 11,
+    index: 10,
     layout: BufferLayout.struct<SystemInstructionInputData['TransferWithSeed']>(
       [
         BufferLayout.u32('instruction'),
@@ -725,12 +606,6 @@ export const SYSTEM_INSTRUCTION_LAYOUTS = Object.freeze<{
         Layout.publicKey('programId'),
       ],
     ),
-  },
-  UpgradeNonceAccount: {
-    index: 12,
-    layout: BufferLayout.struct<
-      SystemInstructionInputData['UpgradeNonceAccount']
-    >([BufferLayout.u32('instruction')]),
   },
 });
 
@@ -765,6 +640,68 @@ export class SystemProgram {
       keys: [
         {pubkey: params.fromPubkey, isSigner: true, isWritable: true},
         {pubkey: params.newAccountPubkey, isSigner: true, isWritable: true},
+      ],
+      programId: this.programId,
+      data,
+    });
+  }
+
+  /**
+   * Generate a transaction instruction that creates a new account anchored to a Bitcoin UTXO
+   */
+  static createAccountWithAnchor(
+    params: CreateAccountWithAnchorParams,
+  ): TransactionInstruction {
+    const type = SYSTEM_INSTRUCTION_LAYOUTS.CreateWithAnchor;
+    const data = encodeData(type, {
+      lamports: params.lamports,
+      space: params.space,
+      programId: toBuffer(params.programId.toBuffer()),
+      txid: Buffer.from(params.txid),
+      vout: params.vout,
+    });
+
+    return new TransactionInstruction({
+      keys: [
+        {pubkey: params.fromPubkey, isSigner: true, isWritable: true},
+        {pubkey: params.newAccountPubkey, isSigner: true, isWritable: true},
+      ],
+      programId: this.programId,
+      data,
+    });
+  }
+
+  /**
+   * Generate a transaction instruction that anchors an existing account to a Bitcoin UTXO
+   */
+  static anchor(params: AnchorParams): TransactionInstruction {
+    const type = SYSTEM_INSTRUCTION_LAYOUTS.Anchor;
+    const data = encodeData(type, {
+      txid: Buffer.from(params.txid),
+      vout: params.vout,
+    });
+
+    return new TransactionInstruction({
+      keys: [
+        {pubkey: params.accountPubkey, isSigner: true, isWritable: true},
+      ],
+      programId: this.programId,
+      data,
+    });
+  }
+
+  /**
+   * Generate a transaction instruction that signs a Bitcoin transaction input
+   */
+  static signInput(params: SignInputParams): TransactionInstruction {
+    const type = SYSTEM_INSTRUCTION_LAYOUTS.SignInput;
+    const data = encodeData(type, {
+      index: params.index,
+    });
+
+    return new TransactionInstruction({
+      keys: [
+        {pubkey: params.signerPubkey, isSigner: true, isWritable: false},
       ],
       programId: this.programId,
       data,
@@ -870,142 +807,6 @@ export class SystemProgram {
 
     return new TransactionInstruction({
       keys,
-      programId: this.programId,
-      data,
-    });
-  }
-
-  /**
-   * Generate a transaction that creates a new Nonce account
-   */
-  static createNonceAccount(
-    params: CreateNonceAccountParams | CreateNonceAccountWithSeedParams,
-  ): Transaction {
-    const transaction = new Transaction();
-    if ('basePubkey' in params && 'seed' in params) {
-      transaction.add(
-        SystemProgram.createAccountWithSeed({
-          fromPubkey: params.fromPubkey,
-          newAccountPubkey: params.noncePubkey,
-          basePubkey: params.basePubkey,
-          seed: params.seed,
-          lamports: params.lamports,
-          space: NONCE_ACCOUNT_LENGTH,
-          programId: this.programId,
-        }),
-      );
-    } else {
-      transaction.add(
-        SystemProgram.createAccount({
-          fromPubkey: params.fromPubkey,
-          newAccountPubkey: params.noncePubkey,
-          lamports: params.lamports,
-          space: NONCE_ACCOUNT_LENGTH,
-          programId: this.programId,
-        }),
-      );
-    }
-
-    const initParams = {
-      noncePubkey: params.noncePubkey,
-      authorizedPubkey: params.authorizedPubkey,
-    };
-
-    transaction.add(this.nonceInitialize(initParams));
-    return transaction;
-  }
-
-  /**
-   * Generate an instruction to initialize a Nonce account
-   */
-  static nonceInitialize(
-    params: InitializeNonceParams,
-  ): TransactionInstruction {
-    const type = SYSTEM_INSTRUCTION_LAYOUTS.InitializeNonceAccount;
-    const data = encodeData(type, {
-      authorized: toBuffer(params.authorizedPubkey.toBuffer()),
-    });
-    const instructionData = {
-      keys: [
-        {pubkey: params.noncePubkey, isSigner: false, isWritable: true},
-        {
-          pubkey: SYSVAR_RECENT_BLOCKHASHES_PUBKEY,
-          isSigner: false,
-          isWritable: false,
-        },
-        {pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false},
-      ],
-      programId: this.programId,
-      data,
-    };
-    return new TransactionInstruction(instructionData);
-  }
-
-  /**
-   * Generate an instruction to advance the nonce in a Nonce account
-   */
-  static nonceAdvance(params: AdvanceNonceParams): TransactionInstruction {
-    const type = SYSTEM_INSTRUCTION_LAYOUTS.AdvanceNonceAccount;
-    const data = encodeData(type);
-    const instructionData = {
-      keys: [
-        {pubkey: params.noncePubkey, isSigner: false, isWritable: true},
-        {
-          pubkey: SYSVAR_RECENT_BLOCKHASHES_PUBKEY,
-          isSigner: false,
-          isWritable: false,
-        },
-        {pubkey: params.authorizedPubkey, isSigner: true, isWritable: false},
-      ],
-      programId: this.programId,
-      data,
-    };
-    return new TransactionInstruction(instructionData);
-  }
-
-  /**
-   * Generate a transaction instruction that withdraws lamports from a Nonce account
-   */
-  static nonceWithdraw(params: WithdrawNonceParams): TransactionInstruction {
-    const type = SYSTEM_INSTRUCTION_LAYOUTS.WithdrawNonceAccount;
-    const data = encodeData(type, {lamports: params.lamports});
-
-    return new TransactionInstruction({
-      keys: [
-        {pubkey: params.noncePubkey, isSigner: false, isWritable: true},
-        {pubkey: params.toPubkey, isSigner: false, isWritable: true},
-        {
-          pubkey: SYSVAR_RECENT_BLOCKHASHES_PUBKEY,
-          isSigner: false,
-          isWritable: false,
-        },
-        {
-          pubkey: SYSVAR_RENT_PUBKEY,
-          isSigner: false,
-          isWritable: false,
-        },
-        {pubkey: params.authorizedPubkey, isSigner: true, isWritable: false},
-      ],
-      programId: this.programId,
-      data,
-    });
-  }
-
-  /**
-   * Generate a transaction instruction that authorizes a new PublicKey as the authority
-   * on a Nonce account.
-   */
-  static nonceAuthorize(params: AuthorizeNonceParams): TransactionInstruction {
-    const type = SYSTEM_INSTRUCTION_LAYOUTS.AuthorizeNonceAccount;
-    const data = encodeData(type, {
-      authorized: toBuffer(params.newAuthorizedPubkey.toBuffer()),
-    });
-
-    return new TransactionInstruction({
-      keys: [
-        {pubkey: params.noncePubkey, isSigner: false, isWritable: true},
-        {pubkey: params.authorizedPubkey, isSigner: true, isWritable: false},
-      ],
       programId: this.programId,
       data,
     });

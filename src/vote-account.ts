@@ -1,3 +1,7 @@
+/**
+ * @deprecated Vote accounts are not used in Arch Network.
+ * This module is retained for backward compatibility only.
+ */
 import * as BufferLayout from '@solana/buffer-layout';
 import type {Buffer} from 'buffer';
 

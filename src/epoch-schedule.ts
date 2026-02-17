@@ -1,3 +1,7 @@
+/**
+ * @deprecated Epoch schedule is not used in Arch Network.
+ * This module is retained for backward compatibility only.
+ */
 const MINIMUM_SLOT_PER_EPOCH = 32;
 
 // Returns the number of trailing zeros in the binary representation of self.
