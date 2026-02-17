@@ -8,7 +8,6 @@ import {
 } from '../instruction';
 import {PublicKey} from '../publickey';
 import {TransactionInstruction} from '../transaction';
-import {u64} from '../utils/bigint';
 
 /**
  * Compute Budget Instruction class
@@ -50,20 +49,6 @@ export class ComputeBudgetInstruction {
   }
 
   /**
-   * Decode request units compute budget instruction and retrieve the instruction params.
-   */
-  static decodeRequestUnits(
-    instruction: TransactionInstruction,
-  ): RequestUnitsParams {
-    this.checkProgramId(instruction.programId);
-    const {units, additionalFee} = decodeData(
-      COMPUTE_BUDGET_INSTRUCTION_LAYOUTS.RequestUnits,
-      instruction.data,
-    );
-    return {units, additionalFee};
-  }
-
-  /**
    * Decode request heap frame compute budget instruction and retrieve the instruction params.
    */
   static decodeRequestHeapFrame(
@@ -92,20 +77,6 @@ export class ComputeBudgetInstruction {
   }
 
   /**
-   * Decode set compute unit price compute budget instruction and retrieve the instruction params.
-   */
-  static decodeSetComputeUnitPrice(
-    instruction: TransactionInstruction,
-  ): SetComputeUnitPriceParams {
-    this.checkProgramId(instruction.programId);
-    const {microLamports} = decodeData(
-      COMPUTE_BUDGET_INSTRUCTION_LAYOUTS.SetComputeUnitPrice,
-      instruction.data,
-    );
-    return {microLamports};
-  }
-
-  /**
    * @internal
    */
   static checkProgramId(programId: PublicKey) {
@@ -119,35 +90,17 @@ export class ComputeBudgetInstruction {
 
 /**
  * An enumeration of valid ComputeBudgetInstructionType's
+ * Arch Network v0.6.1 discriminant ordering
  */
 export type ComputeBudgetInstructionType =
-  // FIXME
-  // It would be preferable for this type to be `keyof ComputeBudgetInstructionInputData`
-  // but Typedoc does not transpile `keyof` expressions.
-  // See https://github.com/TypeStrong/typedoc/issues/1894
-  | 'RequestUnits'
   | 'RequestHeapFrame'
-  | 'SetComputeUnitLimit'
-  | 'SetComputeUnitPrice';
+  | 'SetComputeUnitLimit';
 
 type ComputeBudgetInstructionInputData = {
-  RequestUnits: IInstructionInputData & Readonly<RequestUnitsParams>;
   RequestHeapFrame: IInstructionInputData & Readonly<RequestHeapFrameParams>;
   SetComputeUnitLimit: IInstructionInputData &
     Readonly<SetComputeUnitLimitParams>;
-  SetComputeUnitPrice: IInstructionInputData &
-    Readonly<SetComputeUnitPriceParams>;
 };
-
-/**
- * Request units instruction params
- */
-export interface RequestUnitsParams {
-  /** Units to request for transaction-wide compute */
-  units: number;
-  /** Prioritization fee lamports */
-  additionalFee: number;
-}
 
 /**
  * Request heap frame instruction params
@@ -166,15 +119,8 @@ export interface SetComputeUnitLimitParams {
 }
 
 /**
- * Set compute unit price instruction params
- */
-export interface SetComputeUnitPriceParams {
-  /** Transaction compute unit price used for prioritization fees */
-  microLamports: number | bigint;
-}
-
-/**
  * An enumeration of valid ComputeBudget InstructionType's
+ * Arch Network v0.6.1 discriminant ordering
  * @internal
  */
 export const COMPUTE_BUDGET_INSTRUCTION_LAYOUTS = Object.freeze<{
@@ -182,33 +128,17 @@ export const COMPUTE_BUDGET_INSTRUCTION_LAYOUTS = Object.freeze<{
     ComputeBudgetInstructionInputData[Instruction]
   >;
 }>({
-  RequestUnits: {
-    index: 0,
-    layout: BufferLayout.struct<
-      ComputeBudgetInstructionInputData['RequestUnits']
-    >([
-      BufferLayout.u8('instruction'),
-      BufferLayout.u32('units'),
-      BufferLayout.u32('additionalFee'),
-    ]),
-  },
   RequestHeapFrame: {
-    index: 1,
+    index: 0,
     layout: BufferLayout.struct<
       ComputeBudgetInstructionInputData['RequestHeapFrame']
     >([BufferLayout.u8('instruction'), BufferLayout.u32('bytes')]),
   },
   SetComputeUnitLimit: {
-    index: 2,
+    index: 1,
     layout: BufferLayout.struct<
       ComputeBudgetInstructionInputData['SetComputeUnitLimit']
     >([BufferLayout.u8('instruction'), BufferLayout.u32('units')]),
-  },
-  SetComputeUnitPrice: {
-    index: 3,
-    layout: BufferLayout.struct<
-      ComputeBudgetInstructionInputData['SetComputeUnitPrice']
-    >([BufferLayout.u8('instruction'), u64('microLamports')]),
   },
 });
 
@@ -228,19 +158,6 @@ export class ComputeBudgetProgram {
     'ComputeBudget111111111111111111111111111111',
   );
 
-  /**
-   * @deprecated Instead, call {@link setComputeUnitLimit} and/or {@link setComputeUnitPrice}
-   */
-  static requestUnits(params: RequestUnitsParams): TransactionInstruction {
-    const type = COMPUTE_BUDGET_INSTRUCTION_LAYOUTS.RequestUnits;
-    const data = encodeData(type, params);
-    return new TransactionInstruction({
-      keys: [],
-      programId: this.programId,
-      data,
-    });
-  }
-
   static requestHeapFrame(
     params: RequestHeapFrameParams,
   ): TransactionInstruction {
@@ -258,20 +175,6 @@ export class ComputeBudgetProgram {
   ): TransactionInstruction {
     const type = COMPUTE_BUDGET_INSTRUCTION_LAYOUTS.SetComputeUnitLimit;
     const data = encodeData(type, params);
-    return new TransactionInstruction({
-      keys: [],
-      programId: this.programId,
-      data,
-    });
-  }
-
-  static setComputeUnitPrice(
-    params: SetComputeUnitPriceParams,
-  ): TransactionInstruction {
-    const type = COMPUTE_BUDGET_INSTRUCTION_LAYOUTS.SetComputeUnitPrice;
-    const data = encodeData(type, {
-      microLamports: BigInt(params.microLamports),
-    });
     return new TransactionInstruction({
       keys: [],
       programId: this.programId,

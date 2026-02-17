@@ -1,7 +1,6 @@
 import bs58 from 'bs58';
-import * as BufferLayout from '@solana/buffer-layout';
+import {Buffer} from 'buffer';
 
-import * as Layout from '../layout';
 import {Blockhash} from '../blockhash';
 import {
   MessageHeader,
@@ -9,14 +8,12 @@ import {
   MessageCompiledInstruction,
 } from './index';
 import {PublicKey, PUBLIC_KEY_LENGTH} from '../publickey';
-import * as shortvec from '../utils/shortvec-encoding';
 import assert from '../utils/assert';
-import {PACKET_DATA_SIZE, VERSION_PREFIX_MASK} from '../transaction/constants';
+import {PACKET_DATA_SIZE} from '../transaction/constants';
 import {TransactionInstruction} from '../transaction';
 import {AddressLookupTableAccount} from '../programs';
 import {CompiledKeys} from './compiled-keys';
 import {AccountKeysFromLookups, MessageAccountKeys} from './account-keys';
-import {guardedShift, guardedSplice} from '../utils/guarded-array-utils';
 
 /**
  * Message constructor arguments
@@ -221,284 +218,108 @@ export class MessageV0 {
     });
   }
 
+  /**
+   * Arch Network message format (no version prefix in message, version is at transaction level):
+   * [header: 3 bytes] [account_count: u32 LE] [pubkeys] [blockhash: 32 bytes] [instruction_count: u32 LE] [instructions...]
+   */
   serialize(): Uint8Array {
-    const encodedStaticAccountKeysLength = Array<number>();
-    shortvec.encodeLength(
-      encodedStaticAccountKeysLength,
-      this.staticAccountKeys.length,
-    );
+    const buf = Buffer.alloc(PACKET_DATA_SIZE);
+    let offset = 0;
 
-    const serializedInstructions = this.serializeInstructions();
-    const encodedInstructionsLength = Array<number>();
-    shortvec.encodeLength(
-      encodedInstructionsLength,
-      this.compiledInstructions.length,
-    );
+    buf.writeUInt8(this.header.numRequiredSignatures, offset);
+    offset += 1;
+    buf.writeUInt8(this.header.numReadonlySignedAccounts, offset);
+    offset += 1;
+    buf.writeUInt8(this.header.numReadonlyUnsignedAccounts, offset);
+    offset += 1;
 
-    const serializedAddressTableLookups = this.serializeAddressTableLookups();
-    const encodedAddressTableLookupsLength = Array<number>();
-    shortvec.encodeLength(
-      encodedAddressTableLookupsLength,
-      this.addressTableLookups.length,
-    );
+    buf.writeUInt32LE(this.staticAccountKeys.length, offset);
+    offset += 4;
+    for (const key of this.staticAccountKeys) {
+      Buffer.from(key.toBytes()).copy(buf, offset);
+      offset += PUBLIC_KEY_LENGTH;
+    }
 
-    const messageLayout = BufferLayout.struct<{
-      prefix: number;
-      header: MessageHeader;
-      staticAccountKeysLength: Uint8Array;
-      staticAccountKeys: Array<Uint8Array>;
-      recentBlockhash: Uint8Array;
-      instructionsLength: Uint8Array;
-      serializedInstructions: Uint8Array;
-      addressTableLookupsLength: Uint8Array;
-      serializedAddressTableLookups: Uint8Array;
-    }>([
-      BufferLayout.u8('prefix'),
-      BufferLayout.struct<MessageHeader>(
-        [
-          BufferLayout.u8('numRequiredSignatures'),
-          BufferLayout.u8('numReadonlySignedAccounts'),
-          BufferLayout.u8('numReadonlyUnsignedAccounts'),
-        ],
-        'header',
-      ),
-      BufferLayout.blob(
-        encodedStaticAccountKeysLength.length,
-        'staticAccountKeysLength',
-      ),
-      BufferLayout.seq(
-        Layout.publicKey(),
-        this.staticAccountKeys.length,
-        'staticAccountKeys',
-      ),
-      Layout.publicKey('recentBlockhash'),
-      BufferLayout.blob(encodedInstructionsLength.length, 'instructionsLength'),
-      BufferLayout.blob(
-        serializedInstructions.length,
-        'serializedInstructions',
-      ),
-      BufferLayout.blob(
-        encodedAddressTableLookupsLength.length,
-        'addressTableLookupsLength',
-      ),
-      BufferLayout.blob(
-        serializedAddressTableLookups.length,
-        'serializedAddressTableLookups',
-      ),
-    ]);
+    Buffer.from(bs58.decode(this.recentBlockhash)).copy(buf, offset);
+    offset += PUBLIC_KEY_LENGTH;
 
-    const serializedMessage = new Uint8Array(PACKET_DATA_SIZE);
-    const MESSAGE_VERSION_0_PREFIX = 1 << 7;
-    const serializedMessageLength = messageLayout.encode(
-      {
-        prefix: MESSAGE_VERSION_0_PREFIX,
-        header: this.header,
-        staticAccountKeysLength: new Uint8Array(encodedStaticAccountKeysLength),
-        staticAccountKeys: this.staticAccountKeys.map(key => key.toBytes()),
-        recentBlockhash: bs58.decode(this.recentBlockhash),
-        instructionsLength: new Uint8Array(encodedInstructionsLength),
-        serializedInstructions,
-        addressTableLookupsLength: new Uint8Array(
-          encodedAddressTableLookupsLength,
-        ),
-        serializedAddressTableLookups,
-      },
-      serializedMessage,
-    );
-    return serializedMessage.slice(0, serializedMessageLength);
-  }
+    buf.writeUInt32LE(this.compiledInstructions.length, offset);
+    offset += 4;
 
-  private serializeInstructions(): Uint8Array {
-    let serializedLength = 0;
-    const serializedInstructions = new Uint8Array(PACKET_DATA_SIZE);
     for (const instruction of this.compiledInstructions) {
-      const encodedAccountKeyIndexesLength = Array<number>();
-      shortvec.encodeLength(
-        encodedAccountKeyIndexesLength,
-        instruction.accountKeyIndexes.length,
-      );
+      buf.writeUInt8(instruction.programIdIndex, offset);
+      offset += 1;
 
-      const encodedDataLength = Array<number>();
-      shortvec.encodeLength(encodedDataLength, instruction.data.length);
+      buf.writeUInt32LE(instruction.accountKeyIndexes.length, offset);
+      offset += 4;
+      for (const idx of instruction.accountKeyIndexes) {
+        buf.writeUInt8(idx, offset);
+        offset += 1;
+      }
 
-      const instructionLayout = BufferLayout.struct<{
-        programIdIndex: number;
-        encodedAccountKeyIndexesLength: Uint8Array;
-        accountKeyIndexes: number[];
-        encodedDataLength: Uint8Array;
-        data: Uint8Array;
-      }>([
-        BufferLayout.u8('programIdIndex'),
-        BufferLayout.blob(
-          encodedAccountKeyIndexesLength.length,
-          'encodedAccountKeyIndexesLength',
-        ),
-        BufferLayout.seq(
-          BufferLayout.u8(),
-          instruction.accountKeyIndexes.length,
-          'accountKeyIndexes',
-        ),
-        BufferLayout.blob(encodedDataLength.length, 'encodedDataLength'),
-        BufferLayout.blob(instruction.data.length, 'data'),
-      ]);
-
-      serializedLength += instructionLayout.encode(
-        {
-          programIdIndex: instruction.programIdIndex,
-          encodedAccountKeyIndexesLength: new Uint8Array(
-            encodedAccountKeyIndexesLength,
-          ),
-          accountKeyIndexes: instruction.accountKeyIndexes,
-          encodedDataLength: new Uint8Array(encodedDataLength),
-          data: instruction.data,
-        },
-        serializedInstructions,
-        serializedLength,
-      );
+      buf.writeUInt32LE(instruction.data.length, offset);
+      offset += 4;
+      Buffer.from(instruction.data).copy(buf, offset);
+      offset += instruction.data.length;
     }
 
-    return serializedInstructions.slice(0, serializedLength);
+    return new Uint8Array(buf.slice(0, offset));
   }
 
-  private serializeAddressTableLookups(): Uint8Array {
-    let serializedLength = 0;
-    const serializedAddressTableLookups = new Uint8Array(PACKET_DATA_SIZE);
-    for (const lookup of this.addressTableLookups) {
-      const encodedWritableIndexesLength = Array<number>();
-      shortvec.encodeLength(
-        encodedWritableIndexesLength,
-        lookup.writableIndexes.length,
-      );
-
-      const encodedReadonlyIndexesLength = Array<number>();
-      shortvec.encodeLength(
-        encodedReadonlyIndexesLength,
-        lookup.readonlyIndexes.length,
-      );
-
-      const addressTableLookupLayout = BufferLayout.struct<{
-        accountKey: Uint8Array;
-        encodedWritableIndexesLength: Uint8Array;
-        writableIndexes: number[];
-        encodedReadonlyIndexesLength: Uint8Array;
-        readonlyIndexes: number[];
-      }>([
-        Layout.publicKey('accountKey'),
-        BufferLayout.blob(
-          encodedWritableIndexesLength.length,
-          'encodedWritableIndexesLength',
-        ),
-        BufferLayout.seq(
-          BufferLayout.u8(),
-          lookup.writableIndexes.length,
-          'writableIndexes',
-        ),
-        BufferLayout.blob(
-          encodedReadonlyIndexesLength.length,
-          'encodedReadonlyIndexesLength',
-        ),
-        BufferLayout.seq(
-          BufferLayout.u8(),
-          lookup.readonlyIndexes.length,
-          'readonlyIndexes',
-        ),
-      ]);
-
-      serializedLength += addressTableLookupLayout.encode(
-        {
-          accountKey: lookup.accountKey.toBytes(),
-          encodedWritableIndexesLength: new Uint8Array(
-            encodedWritableIndexesLength,
-          ),
-          writableIndexes: lookup.writableIndexes,
-          encodedReadonlyIndexesLength: new Uint8Array(
-            encodedReadonlyIndexesLength,
-          ),
-          readonlyIndexes: lookup.readonlyIndexes,
-        },
-        serializedAddressTableLookups,
-        serializedLength,
-      );
-    }
-
-    return serializedAddressTableLookups.slice(0, serializedLength);
-  }
-
+  /**
+   * Deserialize Arch Network message format (no version prefix, that's at transaction level).
+   */
   static deserialize(serializedMessage: Uint8Array): MessageV0 {
-    let byteArray = [...serializedMessage];
-
-    const prefix = guardedShift(byteArray);
-    const maskedPrefix = prefix & VERSION_PREFIX_MASK;
-    assert(
-      prefix !== maskedPrefix,
-      `Expected versioned message but received legacy message`,
-    );
-
-    const version = maskedPrefix;
-    assert(
-      version === 0,
-      `Expected versioned message with version 0 but found version ${version}`,
-    );
+    const buf = Buffer.from(serializedMessage);
+    let offset = 0;
 
     const header: MessageHeader = {
-      numRequiredSignatures: guardedShift(byteArray),
-      numReadonlySignedAccounts: guardedShift(byteArray),
-      numReadonlyUnsignedAccounts: guardedShift(byteArray),
+      numRequiredSignatures: buf.readUInt8(offset),
+      numReadonlySignedAccounts: buf.readUInt8(offset + 1),
+      numReadonlyUnsignedAccounts: buf.readUInt8(offset + 2),
     };
+    offset += 3;
+
+    const staticAccountKeysLength = buf.readUInt32LE(offset);
+    offset += 4;
 
     const staticAccountKeys = [];
-    const staticAccountKeysLength = shortvec.decodeLength(byteArray);
     for (let i = 0; i < staticAccountKeysLength; i++) {
       staticAccountKeys.push(
-        new PublicKey(guardedSplice(byteArray, 0, PUBLIC_KEY_LENGTH)),
+        new PublicKey(buf.slice(offset, offset + PUBLIC_KEY_LENGTH)),
       );
+      offset += PUBLIC_KEY_LENGTH;
     }
 
     const recentBlockhash = bs58.encode(
-      guardedSplice(byteArray, 0, PUBLIC_KEY_LENGTH),
+      buf.slice(offset, offset + PUBLIC_KEY_LENGTH),
     );
+    offset += PUBLIC_KEY_LENGTH;
 
-    const instructionCount = shortvec.decodeLength(byteArray);
+    const instructionCount = buf.readUInt32LE(offset);
+    offset += 4;
+
     const compiledInstructions: MessageCompiledInstruction[] = [];
     for (let i = 0; i < instructionCount; i++) {
-      const programIdIndex = guardedShift(byteArray);
-      const accountKeyIndexesLength = shortvec.decodeLength(byteArray);
-      const accountKeyIndexes = guardedSplice(
-        byteArray,
-        0,
-        accountKeyIndexesLength,
+      const programIdIndex = buf.readUInt8(offset);
+      offset += 1;
+
+      const accountKeyIndexesLength = buf.readUInt32LE(offset);
+      offset += 4;
+      const accountKeyIndexes = Array.from(
+        buf.slice(offset, offset + accountKeyIndexesLength),
       );
-      const dataLength = shortvec.decodeLength(byteArray);
-      const data = new Uint8Array(guardedSplice(byteArray, 0, dataLength));
+      offset += accountKeyIndexesLength;
+
+      const dataLength = buf.readUInt32LE(offset);
+      offset += 4;
+      const data = new Uint8Array(buf.slice(offset, offset + dataLength));
+      offset += dataLength;
+
       compiledInstructions.push({
         programIdIndex,
         accountKeyIndexes,
         data,
-      });
-    }
-
-    const addressTableLookupsCount = shortvec.decodeLength(byteArray);
-    const addressTableLookups: MessageAddressTableLookup[] = [];
-    for (let i = 0; i < addressTableLookupsCount; i++) {
-      const accountKey = new PublicKey(
-        guardedSplice(byteArray, 0, PUBLIC_KEY_LENGTH),
-      );
-      const writableIndexesLength = shortvec.decodeLength(byteArray);
-      const writableIndexes = guardedSplice(
-        byteArray,
-        0,
-        writableIndexesLength,
-      );
-      const readonlyIndexesLength = shortvec.decodeLength(byteArray);
-      const readonlyIndexes = guardedSplice(
-        byteArray,
-        0,
-        readonlyIndexesLength,
-      );
-      addressTableLookups.push({
-        accountKey,
-        writableIndexes,
-        readonlyIndexes,
       });
     }
 
@@ -507,7 +328,7 @@ export class MessageV0 {
       staticAccountKeys,
       recentBlockhash,
       compiledInstructions,
-      addressTableLookups,
+      addressTableLookups: [],
     });
   }
 }

@@ -1,3 +1,7 @@
+/**
+ * @deprecated Nonce accounts are not supported in Arch Network.
+ * This module is retained for backward compatibility only.
+ */
 import * as BufferLayout from '@solana/buffer-layout';
 import {Buffer} from 'buffer';
 

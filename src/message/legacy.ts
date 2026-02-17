@@ -5,8 +5,7 @@ import * as BufferLayout from '@solana/buffer-layout';
 import {PublicKey, PUBLIC_KEY_LENGTH} from '../publickey';
 import type {Blockhash} from '../blockhash';
 import * as Layout from '../layout';
-import {PACKET_DATA_SIZE, VERSION_PREFIX_MASK} from '../transaction/constants';
-import * as shortvec from '../utils/shortvec-encoding';
+import {PACKET_DATA_SIZE} from '../transaction/constants';
 import {toBuffer} from '../utils/to-buffer';
 import {
   MessageHeader,
@@ -16,7 +15,6 @@ import {
 import {TransactionInstruction} from '../transaction';
 import {CompiledKeys} from './compiled-keys';
 import {MessageAccountKeys} from './account-keys';
-import {guardedShift, guardedSplice} from '../utils/guarded-array-utils';
 
 /**
  * An instruction to execute by a program
@@ -160,33 +158,33 @@ export class Message {
   serialize(): Buffer {
     const numKeys = this.accountKeys.length;
 
-    let keyCount: number[] = [];
-    shortvec.encodeLength(keyCount, numKeys);
+    const keyCountBuf = Buffer.alloc(4);
+    keyCountBuf.writeUInt32LE(numKeys, 0);
 
     const instructions = this.instructions.map(instruction => {
       const {accounts, programIdIndex} = instruction;
-      const data = Array.from(bs58.decode(instruction.data));
+      const data: number[] = Array.from(bs58.decode(instruction.data));
 
-      let keyIndicesCount: number[] = [];
-      shortvec.encodeLength(keyIndicesCount, accounts.length);
+      const keyIndicesCountBuf = Buffer.alloc(4);
+      keyIndicesCountBuf.writeUInt32LE(accounts.length, 0);
 
-      let dataCount: number[] = [];
-      shortvec.encodeLength(dataCount, data.length);
+      const dataLengthBuf = Buffer.alloc(4);
+      dataLengthBuf.writeUInt32LE(data.length, 0);
 
       return {
         programIdIndex,
-        keyIndicesCount: Buffer.from(keyIndicesCount),
+        keyIndicesCount: keyIndicesCountBuf,
         keyIndices: accounts,
-        dataLength: Buffer.from(dataCount),
+        dataLength: dataLengthBuf,
         data,
       };
     });
 
-    let instructionCount: number[] = [];
-    shortvec.encodeLength(instructionCount, instructions.length);
+    const instructionCountBuf = Buffer.alloc(4);
+    instructionCountBuf.writeUInt32LE(instructions.length, 0);
     let instructionBuffer = Buffer.alloc(PACKET_DATA_SIZE);
-    Buffer.from(instructionCount).copy(instructionBuffer);
-    let instructionBufferLength = instructionCount.length;
+    instructionCountBuf.copy(instructionBuffer);
+    let instructionBufferLength = 4;
 
     instructions.forEach(instruction => {
       const instructionLayout = BufferLayout.struct<
@@ -200,16 +198,13 @@ export class Message {
       >([
         BufferLayout.u8('programIdIndex'),
 
-        BufferLayout.blob(
-          instruction.keyIndicesCount.length,
-          'keyIndicesCount',
-        ),
+        BufferLayout.blob(4, 'keyIndicesCount'),
         BufferLayout.seq(
           BufferLayout.u8('keyIndex'),
           instruction.keyIndices.length,
           'keyIndices',
         ),
-        BufferLayout.blob(instruction.dataLength.length, 'dataLength'),
+        BufferLayout.blob(4, 'dataLength'),
         BufferLayout.seq(
           BufferLayout.u8('userdatum'),
           instruction.data.length,
@@ -238,7 +233,7 @@ export class Message {
       BufferLayout.blob(1, 'numRequiredSignatures'),
       BufferLayout.blob(1, 'numReadonlySignedAccounts'),
       BufferLayout.blob(1, 'numReadonlyUnsignedAccounts'),
-      BufferLayout.blob(keyCount.length, 'keyCount'),
+      BufferLayout.blob(4, 'keyCount'),
       BufferLayout.seq(Layout.publicKey('key'), numKeys, 'keys'),
       Layout.publicKey('recentBlockhash'),
     ]);
@@ -251,7 +246,7 @@ export class Message {
       numReadonlyUnsignedAccounts: Buffer.from([
         this.header.numReadonlyUnsignedAccounts,
       ]),
-      keyCount: Buffer.from(keyCount),
+      keyCount: keyCountBuf,
       keys: this.accountKeys.map(key => toBuffer(key.toBytes())),
       recentBlockhash: bs58.decode(this.recentBlockhash),
     };
@@ -266,39 +261,51 @@ export class Message {
    * Decode a compiled message into a Message object.
    */
   static from(buffer: Buffer | Uint8Array | Array<number>): Message {
-    // Slice up wire data
-    let byteArray = [...buffer];
+    const buf = Buffer.from(buffer);
+    let offset = 0;
 
-    const numRequiredSignatures = guardedShift(byteArray);
-    if (
-      numRequiredSignatures !==
-      (numRequiredSignatures & VERSION_PREFIX_MASK)
-    ) {
-      throw new Error(
-        'Versioned messages must be deserialized with VersionedMessage.deserialize()',
-      );
-    }
+    const numRequiredSignatures = buf.readUInt8(offset);
+    offset += 1;
 
-    const numReadonlySignedAccounts = guardedShift(byteArray);
-    const numReadonlyUnsignedAccounts = guardedShift(byteArray);
+    const numReadonlySignedAccounts = buf.readUInt8(offset);
+    offset += 1;
 
-    const accountCount = shortvec.decodeLength(byteArray);
+    const numReadonlyUnsignedAccounts = buf.readUInt8(offset);
+    offset += 1;
+
+    const accountCount = buf.readUInt32LE(offset);
+    offset += 4;
+
     let accountKeys = [];
     for (let i = 0; i < accountCount; i++) {
-      const account = guardedSplice(byteArray, 0, PUBLIC_KEY_LENGTH);
+      const account = buf.slice(offset, offset + PUBLIC_KEY_LENGTH);
       accountKeys.push(new PublicKey(Buffer.from(account)));
+      offset += PUBLIC_KEY_LENGTH;
     }
 
-    const recentBlockhash = guardedSplice(byteArray, 0, PUBLIC_KEY_LENGTH);
+    const recentBlockhash = buf.slice(offset, offset + PUBLIC_KEY_LENGTH);
+    offset += PUBLIC_KEY_LENGTH;
 
-    const instructionCount = shortvec.decodeLength(byteArray);
+    const instructionCount = buf.readUInt32LE(offset);
+    offset += 4;
+
     let instructions: CompiledInstruction[] = [];
     for (let i = 0; i < instructionCount; i++) {
-      const programIdIndex = guardedShift(byteArray);
-      const accountCount = shortvec.decodeLength(byteArray);
-      const accounts = guardedSplice(byteArray, 0, accountCount);
-      const dataLength = shortvec.decodeLength(byteArray);
-      const dataSlice = guardedSplice(byteArray, 0, dataLength);
+      const programIdIndex = buf.readUInt8(offset);
+      offset += 1;
+
+      const accountsLen = buf.readUInt32LE(offset);
+      offset += 4;
+
+      const accounts = Array.from(buf.slice(offset, offset + accountsLen));
+      offset += accountsLen;
+
+      const dataLength = buf.readUInt32LE(offset);
+      offset += 4;
+
+      const dataSlice = buf.slice(offset, offset + dataLength);
+      offset += dataLength;
+
       const data = bs58.encode(Buffer.from(dataSlice));
       instructions.push({
         programIdIndex,

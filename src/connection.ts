@@ -1710,10 +1710,27 @@ function createRpcClient(
   return clientBrowser;
 }
 
+/**
+ * Map SDK (camelCase) method names to Arch Network (snake_case) RPC method names.
+ * Methods not in this map are passed through as-is.
+ */
+const RPC_METHOD_NAME_MAP: Record<string, string> = {
+  getAccountInfo: 'read_account_info',
+  getMultipleAccounts: 'get_multiple_accounts',
+  getProgramAccounts: 'get_program_accounts',
+  sendTransaction: 'send_transaction',
+  getBlock: 'get_block',
+  getVersion: 'get_version',
+  requestAirdrop: 'request_airdrop',
+  getTransaction: 'get_processed_transaction',
+  getBlockCount: 'get_block_count',
+};
+
 function createRpcRequest(client: RpcClient): RpcRequest {
   return (method, args) => {
+    const rpcMethod = RPC_METHOD_NAME_MAP[method] || method;
     return new Promise((resolve, reject) => {
-      client.request(method, args, (err: any, response: any) => {
+      client.request(rpcMethod, args, (err: any, response: any) => {
         if (err) {
           reject(err);
           return;
@@ -1934,7 +1951,8 @@ const AccountInfoResult = pick({
   owner: PublicKeyFromString,
   lamports: number(),
   data: BufferFromRawAccountData,
-  rentEpoch: number(),
+  rentEpoch: optional(number()),
+  utxo: optional(string()),
 });
 
 /**
@@ -2886,6 +2904,8 @@ export type AccountInfo<T> = {
   data: T;
   /** Optional rent epoch info for account */
   rentEpoch?: number;
+  /** UTXO anchor for this account in format "txid_hex:vout" (Arch Network specific) */
+  utxo?: string;
 };
 
 /**
@@ -2894,6 +2914,59 @@ export type AccountInfo<T> = {
 export type KeyedAccountInfo = {
   accountId: PublicKey;
   accountInfo: AccountInfo<Buffer>;
+};
+
+// =========================================================================
+// Arch Network-specific types
+// =========================================================================
+
+/**
+ * Status of a processed transaction in Arch Network
+ */
+export type ArchTransactionStatus =
+  | 'Queued'
+  | 'Processed'
+  | {Failed: string};
+
+/**
+ * Rollback status of a processed transaction
+ */
+export type ArchRollbackStatus =
+  | 'NotRolledback'
+  | {Rolledback: string};
+
+/**
+ * A processed transaction result from the Arch Network
+ */
+export type ArchProcessedTransaction = {
+  runtime_transaction: any;
+  status: ArchTransactionStatus;
+  bitcoin_txid: string | null;
+  logs: string[];
+  rollback_status: ArchRollbackStatus;
+  inner_instructions_list: any;
+};
+
+/**
+ * Block structure from the Arch Network
+ */
+export type ArchBlock = {
+  transactions: string[];
+  previous_block_hash: string;
+  timestamp: number;
+  block_height: number;
+  bitcoin_block_height: number;
+};
+
+/**
+ * Full block structure with transaction details from the Arch Network
+ */
+export type ArchFullBlock = {
+  transactions: ArchProcessedTransaction[];
+  previous_block_hash: string;
+  timestamp: number;
+  block_height: number;
+  bitcoin_block_height: number;
 };
 
 /**
@@ -6056,6 +6129,310 @@ export class Connection {
         transactionMessage: res.error.message,
         logs: logs,
       });
+    }
+    return res.result;
+  }
+
+  // =========================================================================
+  // Arch Network-specific RPC methods
+  // =========================================================================
+
+  /**
+   * Check if the Arch Network node is ready
+   */
+  async isNodeReady(): Promise<boolean> {
+    const unsafeRes = await this._rpcRequest('is_node_ready', []);
+    const res = create(unsafeRes, jsonRpcResult(boolean()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(res.error, 'failed to check if node is ready');
+    }
+    return res.result;
+  }
+
+  /**
+   * Get the Bitcoin address for an account
+   */
+  async getAccountAddress(publicKey: PublicKey): Promise<string> {
+    const unsafeRes = await this._rpcRequest('get_account_address', [
+      publicKey.toBase58(),
+    ]);
+    const res = create(unsafeRes, jsonRpcResult(string()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(
+        res.error,
+        `failed to get account address for ${publicKey.toBase58()}`,
+      );
+    }
+    return res.result;
+  }
+
+  /**
+   * Send multiple transactions in a batch (max 100)
+   */
+  async sendTransactions(
+    transactions: Array<Buffer | Uint8Array | Array<number>>,
+  ): Promise<string[]> {
+    const encodedTransactions = transactions.map(tx =>
+      Buffer.from(tx).toString('base64'),
+    );
+    const unsafeRes = await this._rpcRequest('send_transactions', [
+      encodedTransactions,
+    ]);
+    const res = create(unsafeRes, jsonRpcResult(array(string())));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(res.error, 'failed to send transactions batch');
+    }
+    return res.result;
+  }
+
+  /**
+   * Get a processed transaction by its ID
+   */
+  async getProcessedTransaction(txid: string): Promise<any> {
+    const unsafeRes = await this._rpcRequest('get_processed_transaction', [
+      txid,
+    ]);
+    const res = create(unsafeRes, jsonRpcResult(unknown()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(
+        res.error,
+        `failed to get processed transaction ${txid}`,
+      );
+    }
+    return res.result;
+  }
+
+  /**
+   * Get recent transactions with optional pagination
+   */
+  async recentTransactions(params?: {
+    limit?: number;
+    offset?: number;
+    account?: string;
+  }): Promise<any> {
+    const unsafeRes = await this._rpcRequest('recent_transactions', [
+      params || {},
+    ]);
+    const res = create(unsafeRes, jsonRpcResult(unknown()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(res.error, 'failed to get recent transactions');
+    }
+    return res.result;
+  }
+
+  /**
+   * Get transactions from a specific block
+   */
+  async getTransactionsByBlock(params: {
+    block_hash?: string;
+    block_height?: number;
+  }): Promise<any> {
+    const unsafeRes = await this._rpcRequest('get_transactions_by_block', [
+      params,
+    ]);
+    const res = create(unsafeRes, jsonRpcResult(unknown()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(
+        res.error,
+        'failed to get transactions by block',
+      );
+    }
+    return res.result;
+  }
+
+  /**
+   * Get multiple transactions by their IDs (max 100)
+   */
+  async getTransactionsByIds(txids: string[]): Promise<any> {
+    const unsafeRes = await this._rpcRequest('get_transactions_by_ids', [
+      {ids: txids},
+    ]);
+    const res = create(unsafeRes, jsonRpcResult(unknown()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(
+        res.error,
+        'failed to get transactions by ids',
+      );
+    }
+    return res.result;
+  }
+
+  /**
+   * Get the best (latest) block hash
+   */
+  async getBestBlockHash(): Promise<string> {
+    const unsafeRes = await this._rpcRequest('get_best_block_hash', []);
+    const res = create(unsafeRes, jsonRpcResult(string()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(res.error, 'failed to get best block hash');
+    }
+    return res.result;
+  }
+
+  /**
+   * Get the best finalized block hash
+   */
+  async getBestFinalizedBlockHash(): Promise<string> {
+    const unsafeRes = await this._rpcRequest('get_best_finalized_block_hash', []);
+    const res = create(unsafeRes, jsonRpcResult(string()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(
+        res.error,
+        'failed to get best finalized block hash',
+      );
+    }
+    return res.result;
+  }
+
+  /**
+   * Get the block hash for a given height
+   */
+  async getBlockHash(height: number): Promise<string> {
+    const unsafeRes = await this._rpcRequest('get_block_hash', [height]);
+    const res = create(unsafeRes, jsonRpcResult(string()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(
+        res.error,
+        `failed to get block hash for height ${height}`,
+      );
+    }
+    return res.result;
+  }
+
+  /**
+   * Get a block by height with an optional transaction filter
+   */
+  async getBlockByHeight(
+    height: number,
+    filter?: 'Signatures' | 'Full',
+  ): Promise<any> {
+    const args: any[] = [height];
+    if (filter) {
+      args.push(filter);
+    }
+    const unsafeRes = await this._rpcRequest('get_block_by_height', args);
+    const res = create(unsafeRes, jsonRpcResult(unknown()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(
+        res.error,
+        `failed to get block at height ${height}`,
+      );
+    }
+    return res.result;
+  }
+
+  /**
+   * Get a full block with transaction IDs
+   */
+  async getFullBlockWithTxids(blockHash: string): Promise<any> {
+    const unsafeRes = await this._rpcRequest('get_full_block_with_txids', [
+      blockHash,
+    ]);
+    const res = create(unsafeRes, jsonRpcResult(unknown()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(
+        res.error,
+        `failed to get full block ${blockHash}`,
+      );
+    }
+    return res.result;
+  }
+
+  /**
+   * Get the block count
+   */
+  async getBlockCount(): Promise<number> {
+    const unsafeRes = await this._rpcRequest('get_block_count', []);
+    const res = create(unsafeRes, jsonRpcResult(number()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(res.error, 'failed to get block count');
+    }
+    return res.result;
+  }
+
+  /**
+   * Get the block execution report
+   */
+  async getBlockExecutionReport(blockHash: string): Promise<any> {
+    const unsafeRes = await this._rpcRequest('get_block_execution_report', [
+      blockHash,
+    ]);
+    const res = create(unsafeRes, jsonRpcResult(unknown()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(
+        res.error,
+        `failed to get block execution report for ${blockHash}`,
+      );
+    }
+    return res.result;
+  }
+
+  /**
+   * Get peer statistics
+   */
+  async getPeers(): Promise<any> {
+    const unsafeRes = await this._rpcRequest('get_peers', []);
+    const res = create(unsafeRes, jsonRpcResult(unknown()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(res.error, 'failed to get peers');
+    }
+    return res.result;
+  }
+
+  /**
+   * Get the current validator state
+   */
+  async getCurrentState(): Promise<any> {
+    const unsafeRes = await this._rpcRequest('get_current_state', []);
+    const res = create(unsafeRes, jsonRpcResult(unknown()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(res.error, 'failed to get current state');
+    }
+    return res.result;
+  }
+
+  /**
+   * Get the network group public key
+   */
+  async getNetworkPubkey(): Promise<string> {
+    const unsafeRes = await this._rpcRequest('get_network_pubkey', []);
+    const res = create(unsafeRes, jsonRpcResult(string()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(res.error, 'failed to get network pubkey');
+    }
+    return res.result;
+  }
+
+  /**
+   * Create an account using the faucet (not available on mainnet)
+   */
+  async createAccountWithFaucet(publicKey: PublicKey): Promise<any> {
+    const unsafeRes = await this._rpcRequest('create_account_with_faucet', [
+      publicKey.toBase58(),
+    ]);
+    const res = create(unsafeRes, jsonRpcResult(unknown()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(
+        res.error,
+        `failed to create account with faucet for ${publicKey.toBase58()}`,
+      );
+    }
+    return res.result;
+  }
+
+  /**
+   * Check for pre-anchor conflicts
+   */
+  async checkPreAnchorConflict(pubkeys: PublicKey[]): Promise<any> {
+    const unsafeRes = await this._rpcRequest('check_pre_anchor_conflict', [
+      pubkeys.map(pk => pk.toBase58()),
+    ]);
+    const res = create(unsafeRes, jsonRpcResult(unknown()));
+    if ('error' in res) {
+      throw new SolanaJSONRPCError(
+        res.error,
+        'failed to check pre-anchor conflict',
+      );
     }
     return res.result;
   }

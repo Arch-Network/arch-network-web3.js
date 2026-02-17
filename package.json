@@ -1,20 +1,22 @@
 {
-  "name": "@solana/web3.js",
-  "version": "1.0.0-maintenance",
-  "description": "Solana Javascript API",
+  "name": "@aspect-build/arch-web3.js",
+  "version": "0.6.1",
+  "description": "Arch Network JavaScript API",
   "keywords": [
     "api",
-    "blockchain"
+    "blockchain",
+    "arch-network",
+    "bitcoin"
   ],
   "license": "MIT",
-  "author": "Solana Labs Maintainers <maintainers@solanalabs.com>",
-  "homepage": "https://solana.com/",
+  "author": "Arch Network",
+  "homepage": "https://arch.network/",
   "repository": {
     "type": "git",
-    "url": "https://github.com/solana-foundation/solana-web3.js.git"
+    "url": "https://github.com/aspect-build/arch-network-web3.js.git"
   },
   "bugs": {
-    "url": "http://github.com/solana-foundation/solana-web3.js.git/issues"
+    "url": "https://github.com/aspect-build/arch-network-web3.js/issues"
   },
   "publishConfig": {
     "access": "public"
